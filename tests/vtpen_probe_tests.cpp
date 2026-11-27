@@ -207,6 +207,43 @@ int main() {
     // Only one position came back.
     CHECK(Probe::parse(E + "[1;1R" + E + "[?62;4c").cursor_after == CursorAfterImage::Unknown);
   }
+  // ---- What was typed meanwhile comes back, in order, without the answers ----
+  {
+    const std::string wt = E + "[>0;10;1c" + E + "[8;40;110t" + E + "[4;800;1100t" + E + "[6;20;10t" + E + "[?2026;2$y" + E + "[?1;0;256S" + E + "[?61;4c";
+    CHECK(Probe::typed(wt) == "");                                                   // only answers: nothing was typed
+    CHECK(Probe::typed("hello\r" + wt) == "hello\r");                                // typed before
+    CHECK(Probe::typed(wt + "tail") == "tail");                                      // typed after the last answer, in the same read
+    CHECK(Probe::typed("ab" + E + "[>0;10;1c" + "cd" + E + "[?61;4c" + "ef") == "abcdef");   // between answers
+    CHECK(Probe::typed("x" + E + "[A" + wt + E + "[1;5C" + "y") == "x" + E + "[A" + E + "[1;5Cy");   // keys that are escape sequences stay
+    CHECK(Probe::typed("a" + E + "P>|tmux 3.4" + E + "\\" + "b" + wt) == "ab");        // the name is the terminal's
+    CHECK(Probe::typed("a" + E + "P>|WezTerm" + "\x07" + "b") == "ab");               // (ended with BEL)
+    CHECK(Probe::typed("a" + E + "P>|cut short") == "a");                            // a name cut short is dropped
+    CHECK(Probe::typed("") == "");
+    // The cursor position is an answer only when it was asked for (F3 with Shift is ESC [ 1 ; 2 R, a key).
+    CHECK(Probe::typed(E + "[1;2R") == E + "[1;2R");
+    CHECK(Probe::typed(E + "[1;2R", true) == "");
+    // Keys that look a bit like answers are not: ESC [ c with nothing before it, a text that merely contains ESC [.
+    CHECK(Probe::typed(E + "[c") == E + "[c");
+    CHECK(Probe::typed(E + "[1;2S") == E + "[1;2S");                                 // Shift F4 is a key, not the picture-size answer
+    CHECK(Probe::typed(E + "[2y") == E + "[2y");                                     // a mode answer has a $ in it
+    CHECK(Probe::typed(E + "[t") == E + "[t");                                       // a window answer starts with a number
+    CHECK(Probe::typed(E + "[?1;0;256S" + E + "[1;2S") == E + "[1;2S");             // and only the right one is taken out
+    CHECK(Probe::typed(E + "[") == E + "[");
+    CHECK(Probe::typed(E + "[1;2") == E + "[1;2");                                   // cut short: kept
+    CHECK(Probe::typed(E) == E);
+    // The answers are what parse() reads, and what is left is what it did not.
+    const std::string mixed = "q" + wt + "w";
+    CHECK(Probe::parse(mixed).usable() && Probe::typed(mixed) == "qw");
+    // Garbage cannot make it fail or grow.
+    std::mt19937 rng(5);
+    const std::string alphabet = "\x1b[]?>;:0123456789$RScyPt|\\\x07 abcXY-";
+    for (int i = 0; i < 4000; i++) {
+      std::string g;
+      for (int j = 0, n = static_cast<int>(rng() % 60); j < n; j++) g += alphabet[rng() % alphabet.size()];
+      const std::string left = Probe::typed(g, i % 2 == 0);
+      CHECK(left.size() <= g.size());
+    }
+  }
   // ---- Garbage in: nothing crashes, nothing is believed too much ----
   {
     std::mt19937 rng(99);

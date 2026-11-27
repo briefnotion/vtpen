@@ -27,6 +27,7 @@ static int failures = 0;
   } while (0)
 
 static const std::string E = "\x1b";
+static const std::string WT_NO_CPR = E + "[>0;10;1c" + E + "[8;40;110t" + E + "[4;800;1100t" + E + "[6;20;10t" + E + "[?61;4;6c";
 static const std::string WT_LIKE = E + "[1;1R" + E + "[4;1R" + E + "[>0;10;1c" + E + "[8;40;110t" + E + "[4;800;1100t" + E + "[6;20;10t" +
                                    E + "[?61;4;6c";
 
@@ -103,6 +104,37 @@ int main() {
     fake.join();
     CHECK(c.answered && asked == Probe::questions(false) && asked.find("1049") == std::string::npos);
     close(to_prog[0]); close(to_prog[1]); close(from_prog[0]); close(from_prog[1]);
+  }
+  {  // What was typed comes back to the caller, in order, when asked for; otherwise it is dropped as before.
+    for (int want = 0; want < 2; want++) {
+      int to_prog[2], from_prog[2];
+      CHECK(pipe(to_prog) == 0 && pipe(from_prog) == 0);
+      std::thread fake([&] { read_questions(from_prog[0]); put(to_prog[1], "ls -l\r" + E + "[A" + WT_NO_CPR + "done"); });
+      std::string typed = "untouched";
+      Capabilities c = want ? probe_terminal(to_prog[0], from_prog[1], 2000, false, &typed) : probe_terminal(to_prog[0], from_prog[1], 2000);
+      fake.join();
+      CHECK(c.answered && c.usable());
+      if (want) CHECK(typed == "ls -l\r" + E + "[Adone");
+      else CHECK(typed == "untouched");                         // not asked for: not touched
+      close(to_prog[0]); close(to_prog[1]); close(from_prog[0]); close(from_prog[1]);
+    }
+    // Nothing typed: an empty string, not what was there before.
+    int to_prog[2], from_prog[2];
+    CHECK(pipe(to_prog) == 0 && pipe(from_prog) == 0);
+    std::thread fake([&] { read_questions(from_prog[0]); put(to_prog[1], WT_NO_CPR); });
+    std::string typed = "old";
+    probe_terminal(to_prog[0], from_prog[1], 2000, false, &typed);
+    fake.join();
+    CHECK(typed.empty());
+    close(to_prog[0]); close(to_prog[1]); close(from_prog[0]); close(from_prog[1]);
+    // The terminal never answers: what was typed still comes back.
+    int a[2], b[2];
+    CHECK(pipe(a) == 0 && pipe(b) == 0);
+    put(a[1], "typed anyway");
+    std::string t2;
+    Capabilities none = probe_terminal(a[0], b[1], 100, false, &t2);
+    CHECK(!none.answered && t2 == "typed anyway");
+    close(a[0]); close(a[1]); close(b[0]); close(b[1]);
   }
   {  // The answer arrives in small pieces with gaps in between.
     Capabilities c = probe_over_pipes([](int, int to, const std::string&) {

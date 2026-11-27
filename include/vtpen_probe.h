@@ -146,6 +146,40 @@ class Probe {
     return false;
   }
 
+  // The keys that were typed while the terminal was answering: `reply` with the terminal's answers taken out, everything else
+  // left as it was, in order (letters, Enter, and the sequences keys send, such as the arrows). The answers are the ESC [ ... c, S,
+  // t and y sequences of the questions above (and R, the cursor position, when the cursor test was asked for) and the ESC P ... ST
+  // string that gives the terminal's name. Use it to put the typing back in front of the program that asked.
+  static std::string typed(const std::string& reply, bool cursor_test = false) {
+    std::string t;
+    size_t i = 0;
+    while (i < reply.size()) {
+      if (reply[i] == '\x1b' && i + 1 < reply.size() && reply[i + 1] == '[') {
+        size_t j = i + 2;
+        while (j < reply.size() && reply[j] >= 0x20 && reply[j] <= 0x3f) j++;           // parameters, then
+        if (j < reply.size() && reply[j] >= 0x40 && reply[j] <= 0x7e) {                  // the final byte
+          const char f = reply[j];
+          const char first = i + 2 < j ? reply[i + 2] : 0;
+          const bool dollar = reply.find('$', i + 2) < j;
+          const bool answer = (f == 'c' && (first == '?' || first == '>')) || (f == 'S' && first == '?') ||
+                              (f == 't' && first >= '0' && first <= '9') || (f == 'y' && dollar) ||
+                              (f == 'R' && cursor_test && first >= '0' && first <= '9');
+          if (!answer) t.append(reply, i, j + 1 - i);
+          i = j + 1;
+          continue;
+        }
+      } else if (reply[i] == '\x1b' && i + 1 < reply.size() && reply[i + 1] == 'P') {     // a string: the terminal's name
+        size_t j = i + 2;
+        while (j < reply.size() && reply[j] != '\x07' && !(reply[j] == '\x1b' && j + 1 < reply.size() && reply[j + 1] == '\\')) j++;
+        if (j >= reply.size()) break;                                                    // cut short: it is the terminal's, not typing
+        i = j + (reply[j] == '\x07' ? 1 : 2);
+        continue;
+      }
+      t += reply[i++];
+    }
+    return t;
+  }
+
   // Read everything the terminal sent back.
   static Capabilities parse(const std::string& reply) {
     Capabilities cap;

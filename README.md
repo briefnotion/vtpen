@@ -122,7 +122,7 @@ so `behaviour.guessed` is true. Anything else has `behaviour.known == false`: te
 The terminals in the world differ here.
 
 If nothing answers within the time, `answered` is false and everything else is empty.
-Keys typed while it waits are dropped. Every number the terminal sends is limited, and
+Keys typed while it waits are read along with the answers: they are dropped, unless you pass a string as the last argument of `probe_terminal`, which then receives them in order (`Probe::typed(reply)` does the same for your own reading), so a program can put them back in front of whatever it starts. Every number the terminal sends is limited, and
 garbage is ignored.
 
 ## When the window is resized
@@ -194,7 +194,7 @@ A command with no colour of its own takes the colour of the object it is in.
 `Probe::questions(cursor_test = false)` the bytes to send (the last question is the plain
 "what are you", which every terminal answers); `Probe::complete(reply)` true once the
 answer to it has arrived; `Probe::parse(reply)` returns `Capabilities`.
-`probe_terminal(in_fd = 0, out_fd = 1, timeout_ms = 1000, cursor_test = false)` does all of
+`probe_terminal(in_fd = 0, out_fd = 1, timeout_ms = 1000, cursor_test = false, typed = nullptr)` does all of
 it, putting the terminal in raw mode meanwhile and back afterwards.
 
 `Capabilities`: `answered`, `sixel`, `usable()`, `max_width`, `max_height`,

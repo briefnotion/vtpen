@@ -6,7 +6,8 @@
 // It puts the terminal in raw mode while it waits (and puts it back), writes the
 // questions from vtpen_probe.h and reads until the last answer comes, the time is
 // up or the input closes. Keys typed during that moment are read along with the
-// answers and dropped. Needs <poll.h>, <termios.h> and <unistd.h>, so Unix only.
+// answers: they are dropped unless you pass `typed`, which then receives them (in order) to
+// hand on to the program. Needs <poll.h>, <termios.h> and <unistd.h>, so Unix only.
 
 #pragma once
 
@@ -22,7 +23,7 @@
 
 namespace vtpen {
 
-inline Capabilities probe_terminal(int in_fd = 0, int out_fd = 1, int timeout_ms = 1000, bool cursor_test = false) {
+inline Capabilities probe_terminal(int in_fd = 0, int out_fd = 1, int timeout_ms = 1000, bool cursor_test = false, std::string* typed = nullptr) {
   termios saved{};
   bool raw = false;
   if (isatty(in_fd) && tcgetattr(in_fd, &saved) == 0) {
@@ -61,6 +62,7 @@ inline Capabilities probe_terminal(int in_fd = 0, int out_fd = 1, int timeout_ms
   }
 
   if (raw) tcsetattr(in_fd, TCSANOW, &saved);
+  if (typed) *typed = Probe::typed(reply, cursor_test);
   return Probe::parse(reply);
 }
 
