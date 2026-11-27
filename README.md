@@ -107,8 +107,11 @@ whether synchronized output exists; and `summary()`, a few lines of text for peo
 Optionally (`cursor_test = true`) it also finds out where the cursor ends up after a
 picture, by drawing a small black picture in the terminal's alternate screen. That is
 off by default: switching screens made Windows Terminal show an extra copy of the line
-above, and vtpen never needs the answer because `CellSender` always moves the cursor
-before it draws.
+above, and the colour and mode questions asked right after it got no answer at all
+(they were answered once the cursor test was left out). vtpen never needs the answer
+because `CellSender` always moves the cursor before it draws. If you use it, do it once,
+at the very start, and do not rely on the terminal answering other questions straight
+afterwards.
 
 What it **cannot** find out: a terminal cannot report whether writing a letter over a
 picture removes the picture's pixels in that cell, or whether a new picture replaces
