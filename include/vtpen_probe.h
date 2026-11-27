@@ -23,12 +23,13 @@
 
 namespace vtpen {
 
-// Where the cursor ended up after a small Sixel picture drawn at the top left.
+// Where the cursor ended up after a Sixel picture a few rows tall, drawn at the top left.
 enum class CursorAfterImage {
   Unknown,
-  Stays,   // where it started
-  Right,   // on the same row, to the right of the picture
-  Below,   // on a later row (the usual "next line" behaviour)
+  Stays,      // where it started
+  Right,      // on the same row, to the right of the picture
+  OnLastRow,  // on the picture's last row
+  Below,      // on the row just below the picture (the usual "next line" behaviour)
 };
 
 // What is known about how the terminal treats pictures and text sharing cells.
@@ -87,9 +88,13 @@ struct Capabilities {
     switch (cursor_after) {
       case CursorAfterImage::Stays: line("After a picture the cursor stays where it was"); break;
       case CursorAfterImage::Right: line("After a picture the cursor is to its right, on the same row"); break;
+      case CursorAfterImage::OnLastRow:
+        line("After a picture the cursor is on the picture's last row (" + std::to_string(cursor_row_delta) + " row(s) down, " +
+             std::to_string(cursor_col_delta) + " column(s) across)");
+        break;
       case CursorAfterImage::Below:
-        line("After a picture the cursor is " + std::to_string(cursor_row_delta) + " row(s) down, " +
-             std::to_string(cursor_col_delta) + " column(s) across");
+        line("After a picture the cursor is on the row below it (" + std::to_string(cursor_row_delta) + " row(s) down, " +
+             std::to_string(cursor_col_delta) + " column(s) across)");
         break;
       case CursorAfterImage::Unknown: line("Where the cursor ends up after a picture: not known"); break;
     }
@@ -109,14 +114,19 @@ class Probe {
   // that every terminal answers, so its answer tells you the others are done: read
   // until a reply of the form ESC [ ? ... c arrives (or give up after a moment).
   //
-  // With cursor_test the probe draws a tiny black picture at the top left of the
-  // terminal's alternate screen (and leaves that screen again), to see where the
-  // cursor ends up. Nothing on the normal screen is touched.
-  static std::string questions(bool cursor_test = true) {
+  // With cursor_test the probe draws a small black picture, 60 pixels tall, at the
+  // top left of the terminal's alternate screen (and leaves that screen again), to
+  // see where the cursor ends up. It is off by default: asking nothing but questions
+  // changes nothing on screen, while switching screens did make Windows Terminal
+  // show an extra copy of the line above. vtpen itself never needs the answer,
+  // because it always moves the cursor before drawing.
+  static std::string questions(bool cursor_test = false) {
     std::string q;
     if (cursor_test) {
       q += "\x1b[?1049h\x1b[1;1H\x1b[6n";                                   // alternate screen, home, where am I
-      q += "\x1bP0;1;0q\"1;1;6;6#0;2;0;0;0#0~~~~~~\x1b\\";                  // a 6x6 pixel picture
+      q += "\x1bP0;1;0q\"1;1;6;60#0;2;0;0;0";                              // a picture 6 wide, 60 tall (ten bands of six rows)
+      for (int band = 0; band < 10; band++) q += band < 9 ? "#0~~~~~~-" : "#0~~~~~~";
+      q += "\x1b\\";
       q += "\x1b[6n";                                                       // where am I now
       q += "\x1b[1;1H \x1b[?1049l";                                         // wipe the cell, back to the normal screen
     }
@@ -194,11 +204,15 @@ class Probe {
 
     // Where the cursor went after the picture.
     if (positions.size() >= 2) {
-      cap.cursor_row_delta = positions[1].first - positions[0].first;
-      cap.cursor_col_delta = positions[1].second - positions[0].second;
-      if (cap.cursor_row_delta == 0 && cap.cursor_col_delta == 0) cap.cursor_after = CursorAfterImage::Stays;
-      else if (cap.cursor_row_delta == 0 && cap.cursor_col_delta > 0) cap.cursor_after = CursorAfterImage::Right;
-      else if (cap.cursor_row_delta > 0) cap.cursor_after = CursorAfterImage::Below;
+      const int dr = cap.cursor_row_delta = positions[1].first - positions[0].first;
+      const int dc = cap.cursor_col_delta = positions[1].second - positions[0].second;
+      // The picture is 60 pixels tall: how many character rows is that?
+      const int tall = cap.cell_h > 0 ? (60 + cap.cell_h - 1) / cap.cell_h : 0;
+      if (dr == 0 && dc == 0) cap.cursor_after = CursorAfterImage::Stays;
+      else if (dr == 0 && dc > 0) cap.cursor_after = CursorAfterImage::Right;
+      else if (tall == 0 && dr > 0) cap.cursor_after = CursorAfterImage::Below;   // cell size unknown: cannot tell the two apart
+      else if (tall > 0 && dr == tall) cap.cursor_after = CursorAfterImage::Below;
+      else if (tall > 1 && dr == tall - 1) cap.cursor_after = CursorAfterImage::OnLastRow;
     }
 
     cap.behaviour = known_behaviour(cap);

@@ -22,7 +22,7 @@
 
 namespace vtpen {
 
-inline Capabilities probe_terminal(int in_fd = 0, int out_fd = 1, int timeout_ms = 1000, bool cursor_test = true) {
+inline Capabilities probe_terminal(int in_fd = 0, int out_fd = 1, int timeout_ms = 1000, bool cursor_test = false) {
   termios saved{};
   bool raw = false;
   if (isatty(in_fd) && tcgetattr(in_fd, &saved) == 0) {

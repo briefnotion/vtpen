@@ -27,7 +27,7 @@ static int failures = 0;
   } while (0)
 
 static const std::string E = "\x1b";
-static const std::string WT_LIKE = E + "[1;1R" + E + "[2;1R" + E + "[>0;10;1c" + E + "[8;40;110t" + E + "[4;800;1100t" + E + "[6;20;10t" +
+static const std::string WT_LIKE = E + "[1;1R" + E + "[4;1R" + E + "[>0;10;1c" + E + "[8;40;110t" + E + "[4;800;1100t" + E + "[6;20;10t" +
                                    E + "[?61;4;6c";
 
 // Reads what the program writes until the last question (ESC [ c) has arrived.
@@ -57,7 +57,7 @@ static void put(int fd, const std::string& s) {
 // Runs the probe against a pretend terminal on pipes; `behave` gets the two pipe ends it plays on.
 // `behave` may close the pipe it writes to by returning true.
 static Capabilities probe_over_pipes(const std::function<bool(int from_prog, int to_prog, const std::string& asked)>& behave, int timeout_ms,
-                                     std::string* asked_out = nullptr, bool cursor_test = true, long long* probe_ms = nullptr) {
+                                     std::string* asked_out = nullptr, bool cursor_test = false, long long* probe_ms = nullptr) {
   int to_prog[2], from_prog[2];
   if (pipe(to_prog) != 0 || pipe(from_prog) != 0) { printf("pipe failed\n"); exit(1); }
   std::string asked;
@@ -83,14 +83,26 @@ int main() {
   {
     std::string asked;
     Capabilities c = probe_over_pipes([](int, int to, const std::string&) { put(to, WT_LIKE); return false; }, 2000, &asked);
-    CHECK(asked == Probe::questions());                         // it sent exactly the questions
+    CHECK(asked == Probe::questions());                         // it sent exactly the questions, without the cursor test
+    CHECK(asked.find("1049") == std::string::npos);
     CHECK(c.answered && c.sixel && c.usable() && c.cell_w == 10);
     CHECK(c.cursor_after == CursorAfterImage::Below);
   }
   {
     std::string asked;
-    probe_over_pipes([](int, int to, const std::string&) { put(to, WT_LIKE); return false; }, 2000, &asked, false);
-    CHECK(asked == Probe::questions(false));
+    probe_over_pipes([](int, int to, const std::string&) { put(to, WT_LIKE); return false; }, 2000, &asked, true);
+    CHECK(asked == Probe::questions(true));                    // with the cursor test when asked for
+    CHECK(asked.find("1049") != std::string::npos);
+  }
+  {  // Called with only the files and the time, it does not run the cursor test.
+    int to_prog[2], from_prog[2];
+    CHECK(pipe(to_prog) == 0 && pipe(from_prog) == 0);
+    std::string asked;
+    std::thread fake([&] { asked = read_questions(from_prog[0]); put(to_prog[1], WT_LIKE); });
+    Capabilities c = probe_terminal(to_prog[0], from_prog[1], 2000);
+    fake.join();
+    CHECK(c.answered && asked == Probe::questions(false) && asked.find("1049") == std::string::npos);
+    close(to_prog[0]); close(to_prog[1]); close(from_prog[0]); close(from_prog[1]);
   }
   {  // The answer arrives in small pieces with gaps in between.
     Capabilities c = probe_over_pipes([](int, int to, const std::string&) {
@@ -109,7 +121,7 @@ int main() {
   {  // Nobody answers: it gives up after the time it was given, and says so.
     long long ms = 0;
     Capabilities c = probe_over_pipes([](int, int, const std::string&) { std::this_thread::sleep_for(std::chrono::milliseconds(600)); return false; }, 150,
-                                      nullptr, true, &ms);
+                                      nullptr, false, &ms);
     CHECK(!c.answered && !c.sixel && !c.usable());
     CHECK(ms >= 140 && ms < 590);                                // waited about 150 ms, not for the thread
   }
@@ -123,12 +135,12 @@ int main() {
   }
   {  // The input closes without an answer: it returns at once.
     long long ms = 0;
-    Capabilities c = probe_over_pipes([](int, int, const std::string&) { return true; }, 5000, nullptr, true, &ms);
+    Capabilities c = probe_over_pipes([](int, int, const std::string&) { return true; }, 5000, nullptr, false, &ms);
     CHECK(!c.answered && ms < 2000);
   }
   {  // Only part of the answers: not complete, and it does not wait forever.
     long long ms = 0;
-    Capabilities c = probe_over_pipes([](int, int to, const std::string&) { put(to, E + "[6;20;10t"); return false; }, 200, nullptr, true, &ms);
+    Capabilities c = probe_over_pipes([](int, int to, const std::string&) { put(to, E + "[6;20;10t"); return false; }, 200, nullptr, false, &ms);
     CHECK(!c.answered && !c.usable() && c.cell_w == 10 && ms < 1500);
   }
   {  // A flood of junk and no end: it stops at its limit.
@@ -142,7 +154,7 @@ int main() {
   {  // A flood of junk is cut off at its limit, long before the time is up.
     long long ms = 0;
     Capabilities c = probe_over_pipes([](int, int to, const std::string&) { put(to, std::string(200000, 'x')); return false; }, 3000,
-                                      nullptr, true, &ms);
+                                      nullptr, false, &ms);
     CHECK(!c.answered && ms < 1500);
   }
   {  // Junk that keeps trickling in does not keep it waiting past its time.
@@ -153,7 +165,7 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
       }
       return false;
-    }, 200, nullptr, true, &ms);
+    }, 200, nullptr, false, &ms);
     CHECK(!c.answered && ms >= 150 && ms < 900);
   }
   {  // Time zero or negative: no waiting, and no crash.
@@ -188,12 +200,12 @@ int main() {
       was_raw = !(now.c_lflag & ICANON) && !(now.c_lflag & ECHO);
       put(master, WT_LIKE);
     });
-    Capabilities c = probe_terminal(slave, slave, 3000);
+    Capabilities c = probe_terminal(slave, slave, 3000, true);
     fake.join();
     termios after{};
     tcgetattr(slave, &after);
     CHECK(c.answered && c.usable() && c.cell_h == 20);
-    CHECK(asked == Probe::questions());
+    CHECK(asked == Probe::questions(true));
     CHECK(was_raw);                                                // raw while it waited
     CHECK(after.c_lflag == before.c_lflag && after.c_iflag == before.c_iflag && after.c_oflag == before.c_oflag &&
           after.c_cflag == before.c_cflag && memcmp(after.c_cc, before.c_cc, sizeof before.c_cc) == 0);   // and put back

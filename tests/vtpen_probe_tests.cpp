@@ -23,7 +23,8 @@ static const std::string E = "\x1b";
 int main() {
   // ---- What we ask ----
   {
-    const std::string q = Probe::questions();
+    CHECK(Probe::questions() == Probe::questions(false));                       // the cursor test is off unless asked for
+    const std::string q = Probe::questions(true);
     CHECK(q.size() > 3 && q.compare(q.size() - 3, 3, "\x1b[c") == 0);          // the sentinel is last
     for (const char* part : {"\x1b[>0q", "\x1b[>c", "\x1b[?1;1;0S", "\x1b[?2;1;0S", "\x1b[18t", "\x1b[14t", "\x1b[16t",
                              "\x1b[?2026$p", "\x1b[?80$p", "\x1b[?8452$p"})
@@ -32,8 +33,13 @@ int main() {
     const size_t on = q.find("\x1b[?1049h"), off = q.find("\x1b[?1049l");
     CHECK(on != std::string::npos && off != std::string::npos && on < off);
     CHECK(q.find("\x1bP0;1;0q") > on && q.find("\x1bP0;1;0q") < off);
+    // The picture is 6 pixels wide and 60 tall: ten bands of six rows.
+    const size_t pic = q.find("\x1bP0;1;0q"), pic_end = q.find("\x1b\\", pic);
+    const std::string head = "\x1bP0;1;0q\"1;1;6;60#0;2";
+    CHECK(q.compare(pic, head.size(), head) == 0);
+    CHECK(std::count(q.begin() + static_cast<std::ptrdiff_t>(pic), q.begin() + static_cast<std::ptrdiff_t>(pic_end), '-') == 9);
     CHECK(q.find("\x1b[6n") > on && q.find("\x1b[6n") < off);
-    const std::string plain = Probe::questions(false);
+    const std::string plain = Probe::questions();
     CHECK(plain.find("1049") == std::string::npos && plain.find("\x1bP") == std::string::npos && plain.find("\x1b[6n") == std::string::npos);
     CHECK(plain.compare(plain.size() - 3, 3, "\x1b[c") == 0);
     // The tiny picture's cell is wiped before leaving the alternate screen.
@@ -53,7 +59,7 @@ int main() {
   }
   // ---- A terminal like Windows Terminal ----
   {
-    const std::string r = E + "[1;1R" + E + "[2;1R" + E + "[>0;10;1c" + E + "[8;40;110t" + E + "[4;800;1100t" + E + "[6;20;10t" +
+    const std::string r = E + "[1;1R" + E + "[4;1R" + E + "[>0;10;1c" + E + "[8;40;110t" + E + "[4;800;1100t" + E + "[6;20;10t" +
                           E + "[?2026;2$y" + E + "[?80;0$y" + E + "[?61;4;6;7;14;21;22;23;24;28;32;42c";
     Capabilities c = Probe::parse(r);
     CHECK(c.answered && c.sixel && c.usable());
@@ -62,7 +68,7 @@ int main() {
     CHECK(c.da2 == (std::vector<int>{0, 10, 1}));
     CHECK(c.da1.size() == 12 && c.da1[0] == 61);
     CHECK(c.max_width == 0 && c.colour_registers == 0);                         // it did not say
-    CHECK(c.cursor_after == CursorAfterImage::Below && c.cursor_row_delta == 1 && c.cursor_col_delta == 0);
+    CHECK(c.cursor_after == CursorAfterImage::Below && c.cursor_row_delta == 3 && c.cursor_col_delta == 0);   // 60 pixels is 3 rows of 20
     CHECK(c.sync_output_mode == 2 && c.supports_sync_output());                // it knows the mode (and it is off, which is normal)
     CHECK(!Probe::parse(E + "[?2026;4$y" + E + "[?62c").supports_sync_output());   // permanently off: not supported
     CHECK(!Probe::parse(E + "[?2026;0$y" + E + "[?62c").supports_sync_output());   // does not know the mode
@@ -153,6 +159,33 @@ int main() {
       CHECK(got.sixel == want.sixel && got.cell_w == want.cell_w && got.cols == want.cols && got.colour_registers == want.colour_registers &&
             got.max_width == want.max_width && got.name == want.name && got.sync_output_mode == want.sync_output_mode && got.da2 == want.da2);
     }
+  }
+  // ---- Where the cursor goes after the 60 pixel tall picture ----
+  {
+    auto after = [&](const std::string& cell, int row2, int col2) {
+      return Probe::parse(E + "[1;1R" + E + "[" + std::to_string(row2) + ";" + std::to_string(col2) + "R" + cell + E + "[?62;4c").cursor_after;
+    };
+    const std::string c20 = E + "[6;20;10t";                       // a cell 20 pixels tall: the picture is 3 rows
+    CHECK(after(c20, 1, 1) == CursorAfterImage::Stays);
+    CHECK(after(c20, 1, 2) == CursorAfterImage::Right);
+    CHECK(after(c20, 4, 1) == CursorAfterImage::Below);
+    CHECK(after(c20, 4, 7) == CursorAfterImage::Below);
+    CHECK(after(c20, 3, 1) == CursorAfterImage::OnLastRow);
+    CHECK(after(c20, 2, 1) == CursorAfterImage::Unknown);          // half way: not a pattern we know
+    CHECK(after(c20, 5, 1) == CursorAfterImage::Unknown);
+    const std::string c30 = E + "[6;30;10t";                       // 30 pixels: 2 rows
+    CHECK(after(c30, 3, 1) == CursorAfterImage::Below);
+    CHECK(after(c30, 2, 1) == CursorAfterImage::OnLastRow);
+    const std::string c25 = E + "[6;25;10t";                       // 60 / 25 is 2.4: the picture covers 3 rows
+    CHECK(after(c25, 4, 1) == CursorAfterImage::Below);
+    CHECK(after(c25, 3, 1) == CursorAfterImage::OnLastRow);
+    const std::string c100 = E + "[6;100;10t";                     // a cell taller than the picture: 1 row
+    CHECK(after(c100, 2, 1) == CursorAfterImage::Below);
+    CHECK(after(c100, 1, 1) == CursorAfterImage::Stays);
+    CHECK(after("", 2, 1) == CursorAfterImage::Below);             // cell size not known: any later row counts as below
+    CHECK(after("", 3, 1) == CursorAfterImage::Below);
+    CHECK(Probe::parse(E + "[1;1R" + E + "[3;1R" + E + "[6;20;10t" + E + "[?62;4c").summary().find("last row") != std::string::npos);
+    CHECK(Probe::parse(E + "[1;1R" + E + "[4;1R" + E + "[6;20;10t" + E + "[?62;4c").summary().find("row below it") != std::string::npos);
   }
   // ---- Odd answers ----
   {

@@ -98,6 +98,14 @@ static void out(const std::string& s) {
   return r;
 }
 
+// What actually came back, for a failure note (shortened).
+static std::string raw_note(const std::string& reply) {
+  if (reply.empty()) return "nothing came back before the answer to the last question";
+  std::string t = show(reply);
+  if (t.size() > 200) t = t.substr(0, 200) + "...";
+  return "what came back: " + t;
+}
+
 static const char* status_name(Status s) {
   switch (s) {
     case Status::Pass: return "PASS   ";
@@ -400,7 +408,7 @@ static Result test_colours() {
   for (int i = 0; i < 16; i++) q += "\x1b]4;" + std::to_string(i) + ";?\x1b\\";
   Asked a = ask(q, 900);
   if (!a.alive) return {Status::Unknown, "the terminal stopped answering"};
-  Result r{Status::Fail, "does not report its colours"};
+  Result r{Status::Fail, "does not report its colours (" + raw_note(a.answer) + ")"};
   std::string hex;
   size_t at = 0;
   std::string line16;
@@ -470,7 +478,7 @@ static Result test_modes() {
     }
     r.details.push_back(std::to_string(m.n) + " " + m.text + ": " + state);
   }
-  if (rep.empty()) return {Status::Fail, "does not answer mode questions (DECRQM)"};
+  if (rep.empty()) return {Status::Fail, "does not answer mode questions (DECRQM) (" + raw_note(a.answer) + ")"};
   r.note = std::to_string(known) + " of " + std::to_string(sizeof modes / sizeof modes[0]) + " supported";
   return r;
 }
@@ -484,7 +492,7 @@ static Result test_kitty_keys() {
     if (c.final == 'u' && c.lead == "?")
       return {Status::Pass, "supports the Kitty keyboard protocol (flags now " +
                                 std::to_string(c.n.empty() ? 0 : c.n[0]) + ")"};
-  return {Status::Fail, "no Kitty keyboard protocol"};
+  return {Status::Fail, "no Kitty keyboard protocol (" + raw_note(a.answer) + ")"};
 }
 
 // ---- True colour accepted? (DECRQSS) -------------------------------------------
@@ -1626,6 +1634,21 @@ static void page_patterns() {
   out("\r\n");
 }
 
+// ---- Page c: where the cursor goes after a picture (uses the alternate screen) ----
+
+static void page_cursor() {
+  out("\x1b[0m\r\nCursor test: this switches to the alternate screen and back, which can leave a repeated line above (seen in Windows Terminal).\r\n");
+  vtpen::Capabilities c = vtpen::probe_terminal(STDIN_FILENO, STDOUT_FILENO, 1500, true);
+  const std::string text = c.summary();
+  for (size_t start = 0; start < text.size();) {
+    size_t end = text.find('\n', start);
+    if (end == std::string::npos) end = text.size();
+    if (end > start) out("  " + text.substr(start, end - start) + "\r\n");
+    start = end + 1;
+  }
+  out("\r\n");
+}
+
 // ---- the report page ------------------------------------------------------
 
 int main() {
@@ -1667,7 +1690,7 @@ int main() {
        " fail, " + std::to_string(count[2]) + " unknown, " +
        std::to_string(count[3]) + " to judge by eye.");
   line("");
-  line("Press 2 or Space for page 2 (a Sixel circle), 3 for page 3 (lines), 4 for page 4 (pictures and text), 5 for page 5 (map), 6 for page 6 (turning map), 7 for page 7 (turning map, full window), 8 for page 8 (shapes), 9 for page 9 (turning arrow), 0 for page 10 (patterns), any other key to quit.");
+  line("Press 2 or Space for page 2 (a Sixel circle), 3 for page 3 (lines), 4 for page 4 (pictures and text), 5 for page 5 (map), 6 for page 6 (turning map), 7 for page 7 (turning map, full window), 8 for page 8 (shapes), 9 for page 9 (turning arrow), 0 for page 10 (patterns), c for the cursor test, any other key to quit.");
   char key;
   while (read(STDIN_FILENO, &key, 1) == 1) {
     if (key == '2' || key == ' ') page_circle();
@@ -1679,6 +1702,7 @@ int main() {
     else if (key == '8') page_shapes();
     else if (key == '9') page_scene();
     else if (key == '0') page_patterns();
+    else if (key == 'c') page_cursor();
     else break;
   }
   return 0;

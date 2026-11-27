@@ -102,9 +102,13 @@ read until `Probe::complete(reply)`, and call `Probe::parse(reply)`.
 What `Capabilities` holds: whether Sixel is available; the largest picture and the
 number of colours (0 when the terminal does not say); window and cell size in cells and
 pixels; the terminal's name (`XTVERSION`), whether tmux or screen is in between;
-whether synchronized output exists; where the cursor ends up after a picture (found by
-drawing a tiny black picture in the terminal's alternate screen, so nothing on the
-normal screen is touched); and `summary()`, a few lines of text for people.
+whether synchronized output exists; and `summary()`, a few lines of text for people.
+
+Optionally (`cursor_test = true`) it also finds out where the cursor ends up after a
+picture, by drawing a small black picture in the terminal's alternate screen. That is
+off by default: switching screens made Windows Terminal show an extra copy of the line
+above, and vtpen never needs the answer because `CellSender` always moves the cursor
+before it draws.
 
 What it **cannot** find out: a terminal cannot report whether writing a letter over a
 picture removes the picture's pixels in that cell, or whether a new picture replaces
@@ -184,16 +188,17 @@ A command with no colour of its own takes the colour of the object it is in.
 
 ### `Probe`, `Capabilities` (vtpen_probe.h) and `probe_terminal` (vtpen_probe_posix.h)
 
-`Probe::questions(cursor_test = true)` the bytes to send (the last question is the plain
+`Probe::questions(cursor_test = false)` the bytes to send (the last question is the plain
 "what are you", which every terminal answers); `Probe::complete(reply)` true once the
 answer to it has arrived; `Probe::parse(reply)` returns `Capabilities`.
-`probe_terminal(in_fd = 0, out_fd = 1, timeout_ms = 1000, cursor_test = true)` does all of
+`probe_terminal(in_fd = 0, out_fd = 1, timeout_ms = 1000, cursor_test = false)` does all of
 it, putting the terminal in raw mode meanwhile and back afterwards.
 
 `Capabilities`: `answered`, `sixel`, `usable()`, `max_width`, `max_height`,
 `colour_registers`, `cols`, `rows`, `cell_w`, `cell_h`, `window_w`, `window_h`, `name`,
 `multiplexer`, `da1`, `da2`, `supports_sync_output()`, `cursor_after`
-(`Stays`, `Right`, `Below`, `Unknown`) with `cursor_row_delta` and `cursor_col_delta`,
+(`Stays`, `Right`, `OnLastRow`, `Below`, `Unknown`; only with the cursor test) with
+`cursor_row_delta` and `cursor_col_delta`,
 `behaviour`, `summary()`.
 
 ### `CellSender` (vtpen_scene.h)
