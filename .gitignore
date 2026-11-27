@@ -2,3 +2,5 @@
 /vtpen_tests
 /vtpen_scene_tests
 *.o
+/vtpen_probe_tests
+/vtpen_probe_posix_tests

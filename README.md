@@ -11,6 +11,8 @@ Two headers:
 |---|---|
 | `include/vtpen.h` | `Canvas` (draw shapes, get Sixel), `Pattern` (fill tiles) |
 | `include/vtpen_scene.h` | `Symbol` and `Scene` (objects you can move, turn and remove), `CellSender` (send only what changed) |
+| `include/vtpen_probe.h` | `Probe` and `Capabilities`: ask the terminal whether it can show pictures (no input or output of its own) |
+| `include/vtpen_probe_posix.h` | `probe_terminal()`: does the asking and reading on a Unix terminal |
 
 Also in this folder: `tools/vtprobe.cpp`, a program you run inside a terminal to see
 what it supports and to try the library (ten pages), and `tests/`.
@@ -78,6 +80,44 @@ Find the size of a character cell by asking the terminal (`ESC [ 16 t` answers
 - **Bad numbers are skipped, not fatal.** NaN and infinity points are dropped, huge
   ones are pulled in, thickness is limited. Nothing hangs or crashes.
 
+## Asking the terminal what it can do
+
+Check before you draw. A terminal that does not know Sixel would print garbage.
+
+```cpp
+#include "vtpen_probe_posix.h"
+
+vtpen::Capabilities cap = vtpen::probe_terminal();   // asks on stdin/stdout, 1 second at most
+if (cap.usable()) {
+  // draw with cap.cell_w and cap.cell_h
+} else {
+  // plain text instead
+}
+```
+
+`usable()` means the terminal answered, says it can draw Sixel, and told us how big a
+character cell is. Without the POSIX helper, send `vtpen::Probe::questions()` yourself,
+read until `Probe::complete(reply)`, and call `Probe::parse(reply)`.
+
+What `Capabilities` holds: whether Sixel is available; the largest picture and the
+number of colours (0 when the terminal does not say); window and cell size in cells and
+pixels; the terminal's name (`XTVERSION`), whether tmux or screen is in between;
+whether synchronized output exists; where the cursor ends up after a picture (found by
+drawing a tiny black picture in the terminal's alternate screen, so nothing on the
+normal screen is touched); and `summary()`, a few lines of text for people.
+
+What it **cannot** find out: a terminal cannot report whether writing a letter over a
+picture removes the picture's pixels in that cell, or whether a new picture replaces
+the old one cleanly. `cap.behaviour` holds what is known from terminals someone has
+looked at. Today that is Windows Terminal only, and it is recognised by how it answers,
+so `behaviour.guessed` is true. Anything else has `behaviour.known == false`: test it
+(`vtprobe` pages 4, 5 and 9 show these things) before relying on `CellSender` there.
+The terminals in the world differ here.
+
+If nothing answers within the time, `answered` is false and everything else is empty.
+Keys typed while it waits are dropped. Every number the terminal sends is limited, and
+garbage is ignored.
+
 ## When the window is resized
 
 The terminal does not repaint a Sixel picture for you after a resize. When you get
@@ -141,6 +181,20 @@ A command with no colour of its own takes the colour of the object it is in.
 `move`, `rotate`, `scale`, `set_colour`, `set_layer`, `show`, `remove`, `exists`, `size`;
 `render(canvas)` clears the canvas and draws every visible object, lowest layer first
 (same layer: the order added). Curves get as many pieces as they need at their final size.
+
+### `Probe`, `Capabilities` (vtpen_probe.h) and `probe_terminal` (vtpen_probe_posix.h)
+
+`Probe::questions(cursor_test = true)` the bytes to send (the last question is the plain
+"what are you", which every terminal answers); `Probe::complete(reply)` true once the
+answer to it has arrived; `Probe::parse(reply)` returns `Capabilities`.
+`probe_terminal(in_fd = 0, out_fd = 1, timeout_ms = 1000, cursor_test = true)` does all of
+it, putting the terminal in raw mode meanwhile and back afterwards.
+
+`Capabilities`: `answered`, `sixel`, `usable()`, `max_width`, `max_height`,
+`colour_registers`, `cols`, `rows`, `cell_w`, `cell_h`, `window_w`, `window_h`, `name`,
+`multiplexer`, `da1`, `da2`, `supports_sync_output()`, `cursor_after`
+(`Stays`, `Right`, `Below`, `Unknown`) with `cursor_row_delta` and `cursor_col_delta`,
+`behaviour`, `summary()`.
 
 ### `CellSender` (vtpen_scene.h)
 

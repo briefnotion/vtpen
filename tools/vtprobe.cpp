@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 
+#include "vtpen_probe_posix.h"
 #include "vtpen_scene.h"
 #include "vtpen.h"
 
@@ -627,12 +628,28 @@ static Result test_regis_picture() {
                "", "", "", "", ""});
 }
 
+// What vtpen's own probe says about this terminal.
+static Result test_vtpen_probe() {
+  vtpen::Capabilities c = vtpen::probe_terminal(STDIN_FILENO, STDOUT_FILENO, 1500);
+  Result r{c.usable() ? Status::Pass : (c.answered ? Status::Fail : Status::Unknown),
+           c.usable() ? "vtpen can draw here" : c.answered ? "vtpen cannot draw here (no Sixel, or the size of a cell is not known)" : "no answer"};
+  const std::string text = c.summary();
+  for (size_t start = 0; start < text.size();) {
+    size_t end = text.find('\n', start);
+    if (end == std::string::npos) end = text.size();
+    if (end > start) r.details.push_back(text.substr(start, end - start));
+    start = end + 1;
+  }
+  return r;
+}
+
 static std::vector<Test> tests() {
   return {
       {"Identifies as (DA1)", test_identity},
       {"Feature list (DA1)", test_features},
       {"Secondary identity (DA2)", test_secondary},
       {"Terminal name (XTVERSION)", test_xtversion},
+      {"vtpen probe (what the library sees)", test_vtpen_probe},
       {"Window and cell size", test_window_size},
       {"Colours it really uses", test_colours},
       {"Modes it knows (DECRQM)", test_modes},

@@ -7,5 +7,9 @@ if [ "$1" = "test" ]; then
   g++ -std=c++17 -g -fsanitize=address,undefined,float-cast-overflow -fno-sanitize-recover=all -Wall -Wextra -Iinclude -Itests -o vtpen_tests tests/vtpen_tests.cpp || exit 1
   ./vtpen_tests || exit 1
   g++ -std=c++17 -g -fsanitize=address,undefined,float-cast-overflow -fno-sanitize-recover=all -Wall -Wextra -Iinclude -Itests -o vtpen_scene_tests tests/vtpen_scene_tests.cpp || exit 1
-  ./vtpen_scene_tests
+  ./vtpen_scene_tests || exit 1
+  g++ -std=c++17 -g -fsanitize=address,undefined,float-cast-overflow -fno-sanitize-recover=all -Wall -Wextra -Iinclude -Itests -o vtpen_probe_tests tests/vtpen_probe_tests.cpp || exit 1
+  ./vtpen_probe_tests || exit 1
+  g++ -std=c++17 -g -pthread -fsanitize=address,undefined,float-cast-overflow -fno-sanitize-recover=all -Wall -Wextra -Iinclude -Itests -o vtpen_probe_posix_tests tests/vtpen_probe_posix_tests.cpp -lutil || exit 1
+  ./vtpen_probe_posix_tests
 fi
