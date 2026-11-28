@@ -4,3 +4,5 @@
 *.o
 /vtpen_probe_tests
 /vtpen_probe_posix_tests
+/vtpen_drawing_tests
+/vtpen_regis_tests

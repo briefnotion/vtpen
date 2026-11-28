@@ -10,6 +10,8 @@ Two headers:
 | Header | What it gives you |
 |---|---|
 | `include/vtpen.h` | `Canvas` (draw shapes, get Sixel), `Pattern` (fill tiles) |
+| `include/vtpen_drawing.h` | `Drawing`: a picture kept as a list of shapes, and its Sixel backend (`draw`, `render`) |
+| `include/vtpen_regis.h` | `Regis` (experimental): shows a `Drawing` on a terminal that understands ReGIS (VT125, VT240, VT340, xterm built with it) |
 | `include/vtpen_scene.h` | `Symbol` and `Scene` (objects you can move, turn and remove), `CellSender` (send only what changed) |
 | `include/vtpen_probe.h` | `Probe` and `Capabilities`: ask the terminal whether it can show pictures (no input or output of its own) |
 | `include/vtpen_probe_posix.h` | `probe_terminal()`: does the asking and reading on a Unix terminal |
@@ -99,7 +101,7 @@ if (cap.usable()) {
 character cell is. Without the POSIX helper, send `vtpen::Probe::questions()` yourself,
 read until `Probe::complete(reply)`, and call `Probe::parse(reply)`.
 
-What `Capabilities` holds: whether Sixel is available; the largest picture and the
+What `Capabilities` holds: whether Sixel is available; whether ReGIS is (`regis`: feature 3 in the terminal's "what are you" answer, or it calls itself a VT125); `graphics()`, which says what to draw with, best first: `Graphics::Regis` if the terminal has ReGIS (no cell size needed), else `Graphics::Sixel` if `usable()`, else `Graphics::None`; the largest picture and the
 number of colours (0 when the terminal does not say); window and cell size in cells and
 pixels; the terminal's name (`XTVERSION`), whether tmux or screen is in between;
 whether synchronized output exists; and `summary()`, a few lines of text for people.
@@ -176,6 +178,50 @@ over ssh (other terminals differ, check with `vtprobe`):
 Size in Sixel (a 165x105 field, from `vtprobe` page 10): solid 0.3 KB, horizontal lines
 0.8 KB, everything else (vertical, diagonal, crosshatch, dots, checker, grey) 3 to 4 KB.
 Horizontal runs compress; anything that changes along a row does not.
+
+### `Drawing` (vtpen_drawing.h)
+
+A picture kept as the shapes you asked for, not as pixels, so more than one backend can
+show it. Today the only backend is Sixel.
+
+`Drawing(w = 800, h = 480)` is the size of your drawing space. It has `set_colour`,
+`set_thickness` (taken when a shape is added) and the same shape commands as `Canvas`
+(`line`, `polyline`, `polygon`, `rectangle`, `circle`, `ellipse`, `arc`, `bezier`,
+`spline`, `fill_polygon`, `fill_rectangle`, `fill_circle`, `fill_ellipse`), plus `clear`,
+`size`, `empty`. It leaves out what every backend cannot do: fill patterns and reading
+pixels back.
+
+`draw(canvas)` replays the shapes onto a canvas (stretched to the canvas's own drawing
+space, and on top of what is already there); `render(pixel_w, pixel_h)` returns a new
+canvas with the drawing on it. The result is pixel for pixel what the same calls
+on a `Canvas` give. For edge softness or a background, make the `Canvas`, set those, and
+call `draw`.
+
+### `Regis` (vtpen_regis.h) — experimental
+
+Experimental: it has not been run on a real ReGIS terminal yet. It is checked only against the tests' own ReGIS reader, which follows the DEC manual, so the arc direction, the colour map and the fill form may still turn out wrong.
+
+Turns a `Drawing` into ReGIS text. `Regis(RegisOptions)`: `palette` (at most 15 colours;
+empty means taken from the first drawing and then kept, because changing the terminal's
+colour map recolours what is already on the screen), and `x, y, width, height`, the part
+of the 800x480 ReGIS screen the drawing's whole space is stretched onto (default all of it).
+`simplify` (default 0.5, in pixels; 0 keeps every point) leaves out a point of a line or curve when it lies within that distance of the line between the points kept around it. It hardly shows and makes the text much shorter (the moon scene's line art went from 11.6 to 5.2 KB).
+
+`draw(d)` draws on top of what is there. `erase(d)` draws the same shapes in the
+background colour. `frame(d)` is for animation: erase what the last call drew, then draw
+this one, in one string. `clear()` wipes the screen. `reset()` after the terminal was reset
+(the colour map is sent again). Every string starts with `ESC P 1 p` and ends with `ESC \`.
+
+What it does: lines are 1 pixel wide, wider ones (1.5 and up) are filled strips (round
+ends and bends from 3 up); round circles and arcs that fit on the screen are ReGIS
+circles and arcs, everything else becomes lines; fills are ReGIS polygon fills, cut into
+horizontal strips when the shape crosses itself or has more than 256 corners (ReGIS
+cannot fill those), which gives the same even-odd result as `Canvas`; nothing is drawn
+outside the rectangle; no smoothing. Colours are mapped to the nearest palette colour,
+entry 0 (the background) is never used. Erasing also removes the pixels of anything else
+that crossed the erased shapes.
+
+The reader is `tests/regis_decode.h`; it and the exact-text tests are the only checks so far.
 
 ### `Symbol`, `Scene` (vtpen_scene.h)
 

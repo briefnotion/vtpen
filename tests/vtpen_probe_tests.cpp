@@ -112,6 +112,31 @@ int main() {
     CHECK(!Probe::parse(E + "[>0;10;1c" + E + "[?61c").behaviour.known);         // and it must draw Sixel
     CHECK(c.summary().find("Largest picture: 1000x800") != std::string::npos);
   }
+  // ---- ReGIS ----
+  {
+    // A VT340-like answer lists both: ReGIS wins. No cell size needed for it.
+    Capabilities both = Probe::parse(E + "[>19;1;0c" + E + "[?63;1;2;3;4;6;7;8;9c");
+    CHECK(both.answered && both.sixel && both.regis && !both.usable() && both.graphics() == Graphics::Regis);
+    CHECK(both.summary().find("ReGIS vector graphics: yes") != std::string::npos);
+    Capabilities both_sized = Probe::parse(E + "[6;20;10t" + E + "[?63;1;2;3;4;6;7;8;9c");   // Sixel usable too: ReGIS still wins
+    CHECK(both_sized.usable() && both_sized.regis && both_sized.graphics() == Graphics::Regis);
+    // With a cell size and Sixel only: Sixel.
+    Capabilities six = Probe::parse(E + "[6;20;10t" + E + "[?61;4;6c");
+    CHECK(six.sixel && !six.regis && six.usable() && six.graphics() == Graphics::Sixel);
+    CHECK(six.summary().find("ReGIS vector graphics: no") != std::string::npos);
+    // Sixel but no cell size and no ReGIS: nothing to draw with.
+    CHECK(Probe::parse(E + "[?61;4c").graphics() == Graphics::None);
+    // ReGIS only, and a terminal that calls itself a VT125.
+    Capabilities rg = Probe::parse(E + "[?62;3;6c");
+    CHECK(rg.regis && !rg.sixel && rg.graphics() == Graphics::Regis);
+    Capabilities v125 = Probe::parse(E + "[?12;7c");
+    CHECK(v125.answered && v125.regis && !v125.sixel && v125.graphics() == Graphics::Regis);
+    // Feature 3 only counts in the feature list, not as the class; other classes are not VT125s.
+    CHECK(!Probe::parse(E + "[?3;1c").regis && !Probe::parse(E + "[?62;1;6c").regis && !Probe::parse(E + "[?1;2c").regis);
+    // Nothing answered: nothing, even though a ReGIS answer was on the wire.
+    Capabilities part = Probe::parse(E + "[?2;0;1000;800S");
+    CHECK(!part.answered && part.graphics() == Graphics::None);
+  }
   // ---- Not Sixel; and no answer at all ----
   {
     Capabilities c = Probe::parse(E + "[>1;10;0c" + E + "[6;16;8t" + E + "[?62;1;6c");

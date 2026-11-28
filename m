@@ -8,6 +8,10 @@ if [ "$1" = "test" ]; then
   ./vtpen_tests || exit 1
   g++ -std=c++17 -g -fsanitize=address,undefined,float-cast-overflow -fno-sanitize-recover=all -Wall -Wextra -Iinclude -Itests -o vtpen_scene_tests tests/vtpen_scene_tests.cpp || exit 1
   ./vtpen_scene_tests || exit 1
+  g++ -std=c++17 -g -fsanitize=address,undefined,float-cast-overflow -fno-sanitize-recover=all -Wall -Wextra -Iinclude -Itests -o vtpen_drawing_tests tests/vtpen_drawing_tests.cpp || exit 1
+  ./vtpen_drawing_tests || exit 1
+  g++ -std=c++17 -g -fsanitize=address,undefined,float-cast-overflow -fno-sanitize-recover=all -Wall -Wextra -Iinclude -Itests -o vtpen_regis_tests tests/vtpen_regis_tests.cpp || exit 1
+  ./vtpen_regis_tests || exit 1
   g++ -std=c++17 -g -fsanitize=address,undefined,float-cast-overflow -fno-sanitize-recover=all -Wall -Wextra -Iinclude -Itests -o vtpen_probe_tests tests/vtpen_probe_tests.cpp || exit 1
   ./vtpen_probe_tests || exit 1
   g++ -std=c++17 -g -pthread -fsanitize=address,undefined,float-cast-overflow -fno-sanitize-recover=all -Wall -Wextra -Iinclude -Itests -o vtpen_probe_posix_tests tests/vtpen_probe_posix_tests.cpp -lutil || exit 1

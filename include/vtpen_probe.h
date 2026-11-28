@@ -44,9 +44,13 @@ struct Behaviour {
   std::string basis;                     // where this comes from
 };
 
+// What to draw with, best first: ReGIS (vectors, small), then Sixel (pixels).
+enum class Graphics { None, Sixel, Regis };
+
 struct Capabilities {
   bool answered = false;        // the terminal answered at all
   bool sixel = false;           // it says it can draw Sixel pictures
+  bool regis = false;           // it says it can draw ReGIS: feature 3 in its "what are you" answer, or it is a VT125
   int max_width = 0;            // largest picture in pixels, 0 = it did not say
   int max_height = 0;
   int colour_registers = 0;     // most colours in one picture, 0 = it did not say
@@ -65,6 +69,9 @@ struct Capabilities {
 
   // Enough to draw: it can show Sixel and we know how big a cell is.
   bool usable() const { return answered && sixel && cell_w > 0 && cell_h > 0; }
+  // Which backend to use: ReGIS when the terminal has it (it needs no cell size), else
+  // Sixel when usable(), else None.
+  Graphics graphics() const { return regis ? Graphics::Regis : usable() ? Graphics::Sixel : Graphics::None; }
   bool supports_sync_output() const { return sync_output_mode >= 1 && sync_output_mode <= 3; }
 
   // A few lines of plain text describing all of this.
@@ -76,6 +83,7 @@ struct Capabilities {
       return s;
     }
     line(std::string("Sixel pictures: ") + (sixel ? "yes" : "no"));
+    line(std::string("ReGIS vector graphics: ") + (regis ? "yes" : "no"));
     if (!name.empty()) line("Calls itself: " + name);
     if (!multiplexer.empty()) line("A multiplexer is in between: " + multiplexer);
     if (cell_w > 0) line("One character cell: " + std::to_string(cell_w) + "x" + std::to_string(cell_h) + " pixels");
@@ -223,6 +231,10 @@ class Probe {
 
     // Does it draw Sixel? Its feature list says so, or it answered the picture questions.
     for (size_t i = 1; i < cap.da1.size(); i++) if (cap.da1[i] == 4) cap.sixel = true;
+    // Does it draw ReGIS? Feature 3 in the same list. A VT125 (class 12) is a ReGIS terminal by
+    // definition; xterm answers that way when it plays one. (How a real VT125 lists itself I could not find.)
+    for (size_t i = 1; i < cap.da1.size(); i++) if (cap.da1[i] == 3) cap.regis = true;
+    if (!cap.da1.empty() && cap.da1[0] == 12) cap.regis = true;
     if (cap.max_width > 0 || cap.colour_registers > 0) cap.sixel = true;
 
     // The size of a cell, if it only gave us the window in pixels and in cells.
