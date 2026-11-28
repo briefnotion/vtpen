@@ -414,6 +414,137 @@ int main() {
     CHECK(cut.size() * 10 < full.size() * 7);
     CHECK(sf.ink() > 1500);
   }
+  // ---- a bigger screen, a rectangle given with the call, learning colours first ----
+  {
+    RegisOptions big;
+    big.palette = {{255, 255, 255}};
+    big.surface_width = 1300; big.surface_height = 806;
+    big.x = 0; big.y = 0; big.width = 1300; big.height = 806;
+    Drawing d(1300, 806);
+    d.line({1000, 600}, {1200, 700});
+    d.fill_rectangle(1100, 20, 150, 60);
+    const std::string s = Regis(big).draw(d);
+    const std::string start = DCS + "S(A[0,0][1299,805])";
+    CHECK(s.compare(0, start.size(), start) == 0);                                              // each string sets the size itself
+    registest::Screen scr = read(s);
+    CHECK(scr.ok && scr.at(1000, 600) && scr.at(1200, 700) && scr.at(1250 - 1, 79) && scr.aw == 1300);
+    CHECK(Regis(big).clear() == DCS + "S(A[0,0][1299,805])S(E)" + ST);
+    CHECK(Regis(big).erase(d).compare(0, (start + "W(E,P1)\n").size(), start + "W(E,P1)\n") == 0);
+    // A screen that is only wider, or only taller, than the usual one sets its size too.
+    RegisOptions wide_only, tall_only;
+    wide_only.palette = tall_only.palette = {{255, 255, 255}};
+    wide_only.surface_width = 1000;
+    tall_only.surface_height = 600;
+    CHECK(Regis(wide_only).clear() == DCS + "S(A[0,0][999,479])S(E)" + ST);
+    CHECK(Regis(tall_only).clear() == DCS + "S(A[0,0][799,599])S(E)" + ST);
+    // The usual size sends no S(A), and drawing beyond it is cut off.
+    CHECK(white().draw(d).find("S(A") == std::string::npos);
+    CHECK(read(white().draw(d)).ok);
+    // Erase takes it away again on the big screen too.
+    Regis br(big);
+    registest::Screen t;
+    registest::read_into(t, br.draw(d));
+    CHECK(t.ink() > 1000);
+    registest::read_into(t, br.erase(d));
+    CHECK(t.ink() == 0);
+    // Clear wipes all of the big screen, not just 800 x 480.
+    registest::read_into(t, br.draw(d));
+    registest::read_into(t, br.clear());
+    CHECK(t.ink() == 0);
+    // Odd sizes are put right.
+    RegisOptions odd;
+    odd.palette = {{255, 255, 255}};
+    odd.surface_width = -4; odd.surface_height = 99999;
+    Drawing e;
+    e.line({0, 0}, {10, 10});
+    const std::string os = Regis(odd).draw(e);
+    CHECK(os.find("S(A[0,0][15,8191])") != std::string::npos);                                 // 16 across at least, 8192 down at most
+    CHECK(read(os).ok);
+  }
+  {
+    // Drawn in the rectangle given with the call: the same as a Regis made for that rectangle.
+    RegisOptions o;
+    o.palette = {{255, 255, 255}};
+    o.x = 100; o.y = 50; o.width = 200; o.height = 100;
+    Drawing d(400, 200);
+    d.circle(200, 100, 80);
+    d.fill_rectangle(10, 10, 100, 40);
+    d.polyline({{0, 0}, {399, 199}});
+    Regis fixed(o);
+    Regis moving = white();
+    CHECK(fixed.draw(d) == moving.draw(d, {100, 50, 200, 100}));
+    CHECK(fixed.erase(d) == moving.erase(d, {100, 50, 200, 100}));
+    // Part of the rectangle off the screen: the drawing is cut off there, not squeezed to fit what is left.
+    Drawing cut(100, 100);
+    cut.set_colour({255, 255, 255});
+    cut.line({0, 50}, {99, 50});                                  // across the middle of the rectangle
+    registest::Screen s = read(white().draw(cut, {750, 100, 100, 100}));    // 50 pixels of it are off the right edge
+    CHECK(s.ok && s.at(750, 150) && s.at(799, 150) && s.ink() == 50);
+    s = read(white().draw(cut, {-50, 100, 100, 100}));            // and off the left edge
+    CHECK(s.ok && s.at(0, 150) && s.at(49, 150) && !s.at(50, 150) && s.ink() == 50);
+    Drawing tick(100, 100);                                       // a mark at 70 across: the rectangle starts at -50, so it lands at 20
+    tick.set_colour({255, 255, 255});
+    tick.line({70, 0}, {70, 99});
+    s = read(white().draw(tick, {-50, 100, 100, 100}));
+    CHECK(s.ok && s.at(20, 150) && !s.at(70, 150) && !s.at(0, 150));
+    s = read(white().draw(cut, {900, 100, 100, 100}));            // wholly off: nothing, and no complaint
+    CHECK(s.ok && s.ink() == 0);
+    s = read(white().draw(cut, {-5000, -5000, 100000, 100000}));  // a huge rectangle is the drawing, very big: some of one line
+    CHECK(s.ok);
+    // A rectangle of a call does not stick for the next one.
+    Regis r2 = white();
+    const std::string a = r2.draw(d, {0, 0, 100, 100}), b = r2.draw(d);
+    CHECK(a != b && body(b) == body(white().draw(d)));
+  }
+  {
+    // Steps in one string: erasing and drawing in one piece leaves what two strings would, but no moment with it erased.
+    RegisOptions o;
+    o.palette = {{255, 255, 255}, {255, 0, 0}};
+    o.surface_width = 400; o.surface_height = 300;
+    Drawing a(100, 100), b(100, 100);
+    a.set_colour({255, 255, 255}); a.line({0, 0}, {99, 99}); a.fill_circle(50, 50, 20);
+    b.set_colour({255, 0, 0}); b.rectangle(10, 10, 80, 80); b.line({0, 99}, {99, 0});
+    const RegisRect ra{20, 30, 150, 150}, rb{200, 40, 100, 100};
+    Regis two(o), one(o);
+    registest::Screen s2, s1;
+    registest::read_into(s2, two.draw(a, ra));
+    registest::read_into(s2, two.draw(b, rb));
+    registest::read_into(s2, two.erase(a, ra));
+    registest::read_into(s2, two.draw(b, ra));
+    const std::string first = one.batch({{false, &a, ra}, {false, &b, rb}});
+    const std::string second = one.batch({{true, &a, ra}, {false, &b, ra}});
+    registest::read_into(s1, first);
+    registest::read_into(s1, second);
+    CHECK(s1.ok && s2.ok && s1.ink() > 500 && s1.px == s2.px);
+    CHECK(std::count(second.begin(), second.end(), '\x1b') == 2 && second.compare(0, 4, DCS) == 0 && second.find(ST) == second.size() - 2);   // one string
+    CHECK(second.find("W(E,P1)") < second.find("W(V,P1)") && second.find("S(E)") == std::string::npos);
+    CHECK(first.find("S(M") != std::string::npos && second.find("S(M") == std::string::npos);                                                  // the colours once
+    CHECK(one.batch({}).empty() && one.batch({{false, nullptr, ra}, {true, nullptr, ra}}).empty());
+    CHECK(one.batch({{false, nullptr, ra}, {true, &a, ra}}) == one.erase(a, ra));                                                              // a step without a drawing is skipped
+    // A palette learned from the first drawing of a batch.
+    Regis fresh;
+    CHECK(fresh.batch({{false, &a, ra}}).find("S(M1(") != std::string::npos && fresh.palette().size() == 1);
+  }
+  {
+    // Colours learned from several drawings before the first is drawn; after that the palette is fixed.
+    Regis r;
+    Drawing a, b, c;
+    a.set_colour({255, 0, 0}); a.line({0, 0}, {5, 0});
+    b.set_colour({0, 255, 0}); b.line({0, 1}, {5, 1}); b.line({0, 2}, {5, 2});
+    c.set_colour({0, 0, 255}); c.line({0, 3}, {5, 3});
+    r.learn_palette(a);
+    r.learn_palette(b);
+    CHECK(r.palette().empty());                                  // nothing is fixed yet
+    r.draw(a);
+    CHECK(r.palette().size() == 2 && r.palette()[0] == (Rgb{0, 255, 0}) && r.palette()[1] == (Rgb{255, 0, 0}));   // green is used twice: first
+    r.learn_palette(c);
+    r.draw(c);
+    CHECK(r.palette().size() == 2);                              // too late: blue takes the nearest of the two
+    // Drawings that were not learned still get a palette from the first one drawn.
+    Regis q;
+    q.draw(c);
+    CHECK(q.palette().size() == 1);
+  }
   // ---- taking shapes away, and animation ----
   {
     Drawing a;

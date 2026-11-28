@@ -1,5 +1,5 @@
-// vtpen ReGIS (experimental: not yet run on a real terminal): show a Drawing on a
-// terminal that understands ReGIS (DEC's vector graphics language: VT125, VT240,
+// vtpen ReGIS (experimental: seen working in xterm 412 as a VT340, not tried on hardware):
+// show a Drawing on a terminal that understands ReGIS (DEC's vector graphics language: VT125, VT240,
 // VT340 and emulators such as xterm built with it).
 //
 //   vtpen::Drawing d(800, 480);
@@ -51,10 +51,26 @@ struct RegisOptions {
   // Where on the ReGIS screen (0..799 across, 0..479 down, top left is 0,0) the
   // drawing goes. The drawing's whole space is stretched to this rectangle.
   int x = 0, y = 0, width = 800, height = 480;
+  // The size of the ReGIS screen in pixels. 800x480 is what every ReGIS terminal starts with. A bigger one is asked
+  // for with S(A[...]) at the start of every string; xterm only gives that when its maxGraphicSize allows it (and
+  // shrinks the whole picture into the corner when it does not), so ask for no more than the terminal says it can do.
+  int surface_width = 800, surface_height = 480;
   // Lines and curves are cut down to fewer points: a point that lies within this many
   // pixels of the straight line between its neighbours is left out, which hardly shows
   // and makes the text much shorter. 0 keeps every point.
   double simplify = 0.5;
+};
+
+// A rectangle of the ReGIS screen, in pixels.
+struct RegisRect {
+  int x = 0, y = 0, width = 800, height = 480;
+};
+
+// One step of Regis::batch: draw a drawing, or take it away (draw it in the background colour), in a rectangle.
+struct RegisOp {
+  bool erase = false;
+  const Drawing* drawing = nullptr;
+  RegisRect rect;
 };
 
 class Regis {
@@ -63,20 +79,27 @@ class Regis {
   static constexpr size_t MAX_COLOURS = 15;
   static constexpr size_t MAX_FILL_CORNERS = 256;
 
+  static constexpr int MIN_SURFACE = 16, MAX_SURFACE = 8192;
+
   explicit Regis(RegisOptions options = RegisOptions()) : opt_(std::move(options)) {
-    opt_.x = std::clamp(opt_.x, 0, SCREEN_W - 1);
-    opt_.y = std::clamp(opt_.y, 0, SCREEN_H - 1);
-    opt_.width = std::clamp(opt_.width, 1, SCREEN_W - opt_.x);
-    opt_.height = std::clamp(opt_.height, 1, SCREEN_H - opt_.y);
+    opt_.surface_width = std::clamp(opt_.surface_width, MIN_SURFACE, MAX_SURFACE);
+    opt_.surface_height = std::clamp(opt_.surface_height, MIN_SURFACE, MAX_SURFACE);
+    const RegisRect r = fit({opt_.x, opt_.y, opt_.width, opt_.height});
+    opt_.x = r.x; opt_.y = r.y; opt_.width = r.width; opt_.height = r.height;
+    set_view(r);
     if (opt_.palette.size() > MAX_COLOURS) opt_.palette.resize(MAX_COLOURS);
     if (!(opt_.simplify > 0) || !std::isfinite(opt_.simplify)) opt_.simplify = 0;
     palette_ = opt_.palette;
     frozen_ = !palette_.empty();
   }
 
-  // Draw the shapes on top of what is on the screen.
-  std::string draw(const Drawing& d) {
-    std::string out = "\x1bP1p";
+  // Draw the shapes on top of what is on the screen, in the rectangle of the options or in the one given. The
+  // drawing's whole space is stretched over the rectangle; a part of the rectangle that lies off the screen is
+  // not drawn (the drawing is cut off there, not squeezed to fit).
+  std::string draw(const Drawing& d) { return draw(d, own_rect()); }
+  std::string draw(const Drawing& d, const RegisRect& where) {
+    set_view(where);
+    std::string out = dcs_open();
     define_palette(d, out);
     out += "W(V,P1)\n";
     body(d, false, out);
@@ -84,17 +107,53 @@ class Regis {
   }
 
   // Take the shapes away again: draw them in the background colour. Anything else
-  // that crossed them loses the pixels they shared.
-  std::string erase(const Drawing& d) const {
-    std::string out = "\x1bP1pW(E,P1)\n";
+  // that crossed them loses the pixels they shared. Give the same rectangle the drawing was drawn in.
+  std::string erase(const Drawing& d) const { return erase(d, own_rect()); }
+  std::string erase(const Drawing& d, const RegisRect& where) const {
+    set_view(where);
+    std::string out = dcs_open() + "W(E,P1)\n";
     body(d, true, out);
     return out + "\x1b\\";
+  }
+
+  // Several steps in one string, in order. A terminal draws what it has when a string ends (xterm also now and then within
+  // a long one), so a drawing that is erased and drawn again in one string is never seen erased: use this, not two strings, to
+  // change a picture. A step without a drawing is skipped; no steps give an empty string.
+  std::string batch(const std::vector<RegisOp>& steps) {
+    bool any = false;
+    for (const RegisOp& op : steps) any = any || op.drawing != nullptr;
+    if (!any) return std::string();
+    std::string out = dcs_open();
+    for (const RegisOp& op : steps) {
+      if (!op.drawing) continue;
+      set_view(op.rect);
+      if (op.erase) {
+        out += "W(E,P1)\n";
+        body(*op.drawing, true, out);
+      } else {
+        define_palette(*op.drawing, out);
+        out += "W(V,P1)\n";
+        body(*op.drawing, false, out);
+      }
+    }
+    return out + "\x1b\\";
+  }
+
+  // Look at a drawing's colours before the first one is drawn, so the palette that is then kept suits all of them
+  // (drawings that come later only get the nearest of those). Once you use this, give it every drawing the palette
+  // should suit, the first one to be drawn included: draw() then does not count that one again. Ignored once the
+  // palette is fixed.
+  void learn_palette(const Drawing& d) {
+    if (frozen_) return;
+    learn(d);
+    learned_ = true;
   }
 
   // For animation: take away what the last call drew, then draw this one, in one
   // piece. The first call only draws.
   std::string frame(const Drawing& next) {
-    std::string out = "\x1bP1p";
+    set_view(own_rect());
+    std::string out = dcs_open();
     define_palette(next, out);
     if (have_previous_) {
       out += "W(E,P1)\n";
@@ -111,7 +170,7 @@ class Regis {
   std::string clear() {
     have_previous_ = false;
     previous_.clear();
-    return "\x1bP1pS(E)\x1b\\";
+    return dcs_open() + "S(E)\x1b\\";
   }
 
   // The terminal was reset or is a different one: send the colour map again and forget the last frame.
@@ -135,23 +194,35 @@ class Regis {
   RegisOptions opt_;
   std::vector<Rgb> palette_;
   bool frozen_ = false, colours_sent_ = false, have_previous_ = false;
+  bool learned_ = false;                              // learn_palette was used: draw() does not count its drawing as well
+  std::vector<std::pair<uint32_t, int>> seen_;        // colours learned before the palette was fixed, and how many shapes use each
+  mutable RegisRect map_;                             // the rectangle the drawing is stretched over (set at the start of each call)
+  mutable RegisRect view_;                            // the part of it on the screen: only here is anything drawn (width 0: none)
   Drawing previous_;
 
   // ---- the colour map ----------------------------------------------------------------
 
+  // The colours of a drawing, counted by how many shapes use them (until the palette is fixed).
+  void learn(const Drawing& d) {
+    for (const Drawing::Command& c : d.commands_) {
+      const uint32_t k = static_cast<uint32_t>(c.colour.r) << 16 | static_cast<uint32_t>(c.colour.g) << 8 | c.colour.b;
+      auto it = std::find_if(seen_.begin(), seen_.end(), [&](const std::pair<uint32_t, int>& e) { return e.first == k; });
+      if (it == seen_.end()) seen_.push_back({k, 1}); else it->second++;
+    }
+  }
+
   void define_palette(const Drawing& d, std::string& out) {
-    if (!frozen_ && !d.commands_.empty()) {
-      std::vector<std::pair<uint32_t, int>> seen;  // colour, how many shapes
-      for (const Drawing::Command& c : d.commands_) {
-        const uint32_t k = static_cast<uint32_t>(c.colour.r) << 16 | static_cast<uint32_t>(c.colour.g) << 8 | c.colour.b;
-        auto it = std::find_if(seen.begin(), seen.end(), [&](const std::pair<uint32_t, int>& e) { return e.first == k; });
-        if (it == seen.end()) seen.push_back({k, 1}); else it->second++;
+    if (!frozen_) {
+      if (!learned_) learn(d);
+      if (!seen_.empty()) {
+        std::vector<std::pair<uint32_t, int>> seen = seen_;
+        std::stable_sort(seen.begin(), seen.end(), [](const std::pair<uint32_t, int>& a, const std::pair<uint32_t, int>& b) { return a.second > b.second; });
+        if (seen.size() > MAX_COLOURS) seen.resize(MAX_COLOURS);
+        for (const auto& e : seen)
+          palette_.push_back({static_cast<uint8_t>(e.first >> 16), static_cast<uint8_t>(e.first >> 8), static_cast<uint8_t>(e.first)});
+        frozen_ = true;
+        seen_.clear();
       }
-      std::stable_sort(seen.begin(), seen.end(), [](const std::pair<uint32_t, int>& a, const std::pair<uint32_t, int>& b) { return a.second > b.second; });
-      if (seen.size() > MAX_COLOURS) seen.resize(MAX_COLOURS);
-      for (const auto& e : seen)
-        palette_.push_back({static_cast<uint8_t>(e.first >> 16), static_cast<uint8_t>(e.first >> 8), static_cast<uint8_t>(e.first)});
-      frozen_ = true;
     }
     if (colours_sent_ || palette_.empty()) return;
     out += "S(M";
@@ -195,8 +266,9 @@ class Regis {
   // ---- the shapes ----------------------------------------------------------------------
 
   void body(const Drawing& d, bool erasing, std::string& out) const {
-    const double kx = static_cast<double>(opt_.width) / d.w_, ky = static_cast<double>(opt_.height) / d.h_;
-    auto map = [&](Point p) { return Point{opt_.x + p.x * kx, opt_.y + p.y * ky}; };
+    if (view_.width <= 0 || view_.height <= 0) return;                  // none of the rectangle is on the screen
+    const double kx = static_cast<double>(map_.width) / d.w_, ky = static_cast<double>(map_.height) / d.h_;
+    auto map = [&](Point p) { return Point{map_.x + p.x * kx, map_.y + p.y * ky}; };
     auto mapped = [&](const std::vector<Point>& pts) {  // not-a-number points are dropped, huge ones pulled in
       std::vector<Point> r;
       r.reserve(pts.size());
@@ -247,11 +319,40 @@ class Regis {
     }
   }
 
+  RegisRect own_rect() const { return {opt_.x, opt_.y, opt_.width, opt_.height}; }
+  void set_view(const RegisRect& r) const {
+    map_ = r;
+    map_.x = std::clamp(map_.x, -MAX_SURFACE * 4, MAX_SURFACE * 4);
+    map_.y = std::clamp(map_.y, -MAX_SURFACE * 4, MAX_SURFACE * 4);
+    map_.width = std::clamp(map_.width, 1, MAX_SURFACE * 4);
+    map_.height = std::clamp(map_.height, 1, MAX_SURFACE * 4);
+    const long long x0 = std::max(0, map_.x), y0 = std::max(0, map_.y);
+    const long long x1 = std::min<long long>(opt_.surface_width, static_cast<long long>(map_.x) + map_.width);
+    const long long y1 = std::min<long long>(opt_.surface_height, static_cast<long long>(map_.y) + map_.height);
+    view_ = {static_cast<int>(x0), static_cast<int>(y0), static_cast<int>(std::max(0LL, x1 - x0)), static_cast<int>(std::max(0LL, y1 - y0))};
+  }
+  // A rectangle cut to lie on the screen, at least one pixel big.
+  RegisRect fit(RegisRect r) const {
+    r.x = std::clamp(r.x, 0, opt_.surface_width - 1);
+    r.y = std::clamp(r.y, 0, opt_.surface_height - 1);
+    r.width = std::clamp(r.width, 1, opt_.surface_width - r.x);
+    r.height = std::clamp(r.height, 1, opt_.surface_height - r.y);
+    return r;
+  }
+  // How a string starts: ESC P 1 p, and, on a screen that is not the usual size, S(A[...]) to set it (a string that
+  // starts with 1p starts over at the terminal's own size).
+  std::string dcs_open() const {
+    std::string s = "\x1bP1p";
+    if (opt_.surface_width != SCREEN_W || opt_.surface_height != SCREEN_H)
+      s += "S(A[0,0][" + std::to_string(opt_.surface_width - 1) + "," + std::to_string(opt_.surface_height - 1) + "])";
+    return s;
+  }
+
   // The rectangle that may be drawn in, as pixel numbers.
-  double x0() const { return opt_.x; }
-  double y0() const { return opt_.y; }
-  double x1() const { return opt_.x + opt_.width - 1; }
-  double y1() const { return opt_.y + opt_.height - 1; }
+  double x0() const { return view_.x; }
+  double y0() const { return view_.y; }
+  double x1() const { return view_.x + view_.width - 1; }
+  double y1() const { return view_.y + view_.height - 1; }
 
   static long long rnd(double v) { return static_cast<long long>(std::floor(std::clamp(v, -LIMIT, LIMIT) + 0.5)); }
   IPt pixel(Point p) const {

@@ -11,7 +11,7 @@ Two headers:
 |---|---|
 | `include/vtpen.h` | `Canvas` (draw shapes, get Sixel), `Pattern` (fill tiles) |
 | `include/vtpen_drawing.h` | `Drawing`: a picture kept as a list of shapes, and its Sixel backend (`draw`, `render`) |
-| `include/vtpen_regis.h` | `Regis` (experimental): shows a `Drawing` on a terminal that understands ReGIS (VT125, VT240, VT340, xterm built with it) |
+| `include/vtpen_regis.h` | `Regis` (experimental, seen working in xterm): shows a `Drawing` on a terminal that understands ReGIS (VT125, VT240, VT340, xterm built with it) |
 | `include/vtpen_scene.h` | `Symbol` and `Scene` (objects you can move, turn and remove), `CellSender` (send only what changed) |
 | `include/vtpen_probe.h` | `Probe` and `Capabilities`: ask the terminal whether it can show pictures (no input or output of its own) |
 | `include/vtpen_probe_posix.h` | `probe_terminal()`: does the asking and reading on a Unix terminal |
@@ -199,13 +199,30 @@ call `draw`.
 
 ### `Regis` (vtpen_regis.h) — experimental
 
-Experimental: it has not been run on a real ReGIS terminal yet. It is checked only against the tests' own ReGIS reader, which follows the DEC manual, so the arc direction, the colour map and the fill form may still turn out wrong.
+Checked by eye in xterm 412 built with `--enable-regis-graphics` and run as a VT340 (`xterm -ti 340`): one of every shape (arcs in the right quarters, fills, the hole in a star, wide lines, curves, colours) looked right, and the animated moon line art ran at 15 frames a second at about 9 KB a frame. Not tried on VT125, VT240 or VT340 hardware or in any other emulator, so what a VT125 does with the colour map in particular is unknown.
 
 Turns a `Drawing` into ReGIS text. `Regis(RegisOptions)`: `palette` (at most 15 colours;
 empty means taken from the first drawing and then kept, because changing the terminal's
 colour map recolours what is already on the screen), and `x, y, width, height`, the part
 of the 800x480 ReGIS screen the drawing's whole space is stretched onto (default all of it).
 `simplify` (default 0.5, in pixels; 0 keeps every point) leaves out a point of a line or curve when it lies within that distance of the line between the points kept around it. It hardly shows and makes the text much shorter (the moon scene's line art went from 11.6 to 5.2 KB).
+
+`surface_width` and `surface_height` (default 800 x 480, what every ReGIS terminal starts with) are the size of the ReGIS screen:
+a bigger one is asked for with `S(A[...])` at the start of every string, and xterm only gives it up to its `maxGraphicSize`
+(1000 x 1000 unless raised; past it xterm shrinks the whole picture into the corner), so ask for no more than the probe
+says (`Capabilities::max_width` and `max_height`). The ReGIS screen starts at the top left of the window and is never
+stretched to fill it.
+
+`draw(d, rect)` and `erase(d, rect)` take the rectangle with the call (a `RegisRect{x, y, width, height}`), so one `Regis`
+can draw many drawings in different places; erase with the rectangle the drawing was drawn in. The drawing's space is
+stretched over the whole rectangle, and a part of it that lies off the screen is cut off, not squeezed. `learn_palette(d)`
+shows the palette the colours of drawings that will be drawn later, before the first is drawn, so the palette that is then
+fixed suits all of them (give it the first drawing too).
+
+`batch(steps)` does several draws and erases, each with its drawing and rectangle (`RegisOp{erase, &drawing, rect}`), in one string:
+a terminal draws what it has when a string ends, so a picture that is changed in one string is never seen half changed. Note that
+an erased ReGIS pixel is the background colour, black in xterm, not a hole: it hides what is under it (letters, say). Where letters
+are under a drawing, take it off by writing those letters again instead (vtscreen does).
 
 `draw(d)` draws on top of what is there. `erase(d)` draws the same shapes in the
 background colour. `frame(d)` is for animation: erase what the last call drew, then draw
@@ -221,7 +238,7 @@ outside the rectangle; no smoothing. Colours are mapped to the nearest palette c
 entry 0 (the background) is never used. Erasing also removes the pixels of anything else
 that crossed the erased shapes.
 
-The reader is `tests/regis_decode.h`; it and the exact-text tests are the only checks so far.
+The tests use a small ReGIS reader of their own (`tests/regis_decode.h`) that follows the DEC manual.
 
 ### `Symbol`, `Scene` (vtpen_scene.h)
 

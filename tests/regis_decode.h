@@ -15,8 +15,10 @@
 namespace registest {
 
 struct Screen {
-  static constexpr int W = 800, H = 480;
-  std::vector<uint8_t> px = std::vector<uint8_t>(static_cast<size_t>(W) * H, 0);  // 0 = background
+  // The picture buffer (w x h, grown when a bigger S(A) asks for it) and the coordinates in use (aw x ah): every
+  // string that starts with ESC P 1 p starts over at 800 x 480 until it sets its own with S(A[0,0][x,y]).
+  int w = 800, h = 480, aw = 800, ah = 480;
+  std::vector<uint8_t> px = std::vector<uint8_t>(static_cast<size_t>(800) * 480, 0);  // 0 = background
   std::array<std::array<int, 3>, 16> hls{};   // hue, lightness, saturation as sent
   std::array<bool, 16> defined{};
   long long cx = 0, cy = 0;
@@ -26,12 +28,19 @@ struct Screen {
   int dcs = 0;            // how many complete ESC P 1 p ... ESC \ were read
   std::string error;
 
-  uint8_t at(int x, int y) const { return x < 0 || y < 0 || x >= W || y >= H ? 0 : px[static_cast<size_t>(y) * W + x]; }
+  uint8_t at(int x, int y) const { return x < 0 || y < 0 || x >= w || y >= h ? 0 : px[static_cast<size_t>(y) * w + x]; }
+  void grow(int nw, int nh) {                     // keep what is there, bigger
+    if (nw <= w && nh <= h) return;
+    const int W2 = std::max(w, nw), H2 = std::max(h, nh);
+    std::vector<uint8_t> n(static_cast<size_t>(W2) * H2, 0);
+    for (int y = 0; y < h; y++) std::copy(px.begin() + static_cast<std::ptrdiff_t>(y) * w, px.begin() + static_cast<std::ptrdiff_t>(y + 1) * w, n.begin() + static_cast<std::ptrdiff_t>(y) * W2);
+    px = std::move(n); w = W2; h = H2;
+  }
   int ink() const { int n = 0; for (uint8_t p : px) n += p != 0; return n; }
 
   void set(long long x, long long y) {
-    if (x < 0 || y < 0 || x >= W || y >= H) { fail("pixel off the screen"); return; }
-    px[static_cast<size_t>(y) * W + x] = erase ? 0 : static_cast<uint8_t>(colour);
+    if (x < 0 || y < 0 || x >= aw || y >= ah) { fail("pixel off the screen"); return; }
+    px[static_cast<size_t>(y) * w + x] = erase ? 0 : static_cast<uint8_t>(colour);
   }
   void fail(const std::string& why) { if (ok) error = why; ok = false; }
 
@@ -75,6 +84,7 @@ class Reader {
       if (s_.compare(i, 4, "\x1bP1p") != 0) { scr_.fail("not a ReGIS start"); return; }
       const size_t end = s_.find("\x1b\\", i);
       if (end == std::string::npos) { scr_.fail("no ST"); return; }
+      scr_.aw = 800; scr_.ah = 480;               // each string starts over at the usual size
       body(i + 4, end);
       if (!scr_.ok) return;
       scr_.dcs++;
@@ -106,7 +116,7 @@ class Reader {
     need('[');
     if (eat(']')) return false;
     x = number(); need(','); y = number(); need(']');
-    if (scr_.ok && (x < 0 || y < 0 || x >= Screen::W || y >= Screen::H)) scr_.fail("position off the screen: " + std::to_string(x) + "," + std::to_string(y));
+    if (scr_.ok && (x < 0 || y < 0 || x >= scr_.aw || y >= scr_.ah)) scr_.fail("position off the screen: " + std::to_string(x) + "," + std::to_string(y));
     return true;
   }
 
@@ -165,7 +175,7 @@ class Reader {
       const long long r = std::llround(std::hypot(static_cast<double>(x - scr_.cx), static_cast<double>(y - scr_.cy)));
       for (long long dy = -r; dy <= r; dy++)
         for (long long dx = -r; dx <= r; dx++)
-          if (dx * dx + dy * dy <= r * r + r) { if (scr_.cx + dx >= 0 && scr_.cx + dx < Screen::W && scr_.cy + dy >= 0 && scr_.cy + dy < Screen::H) scr_.set(scr_.cx + dx, scr_.cy + dy); else scr_.fail("fill off the screen"); }
+          if (dx * dx + dy * dy <= r * r + r) { if (scr_.cx + dx >= 0 && scr_.cx + dx < scr_.aw && scr_.cy + dy >= 0 && scr_.cy + dy < scr_.ah) scr_.set(scr_.cx + dx, scr_.cy + dy); else scr_.fail("fill off the screen"); }
       need(')');
       return;
     }
@@ -197,7 +207,22 @@ class Reader {
 
   void screen() {
     need('(');
-    if (eat('E')) { std::fill(scr_.px.begin(), scr_.px.end(), static_cast<uint8_t>(0)); need(')'); return; }
+    if (eat('E')) {                               // erases what the current coordinates cover
+      for (int y = 0; y < scr_.ah && y < scr_.h; y++)
+        std::fill(scr_.px.begin() + static_cast<std::ptrdiff_t>(y) * scr_.w, scr_.px.begin() + static_cast<std::ptrdiff_t>(y) * scr_.w + std::min(scr_.aw, scr_.w), static_cast<uint8_t>(0));
+      need(')');
+      return;
+    }
+    if (eat('A')) {                               // S(A[0,0][x,y]): the coordinates 0..x and 0..y cover the screen, which is that big
+      long long x0, y0, x1, y1;
+      need('[');
+      x0 = number(); need(','); y0 = number(); need(']'); need('['); x1 = number(); need(','); y1 = number(); need(']');
+      need(')');
+      if (scr_.ok && (x0 != 0 || y0 != 0 || x1 < 1 || y1 < 1 || x1 > 8191 || y1 > 8191)) { scr_.fail("S(A) the reader does not know"); return; }
+      scr_.aw = static_cast<int>(x1) + 1; scr_.ah = static_cast<int>(y1) + 1;
+      scr_.grow(scr_.aw, scr_.ah);
+      return;
+    }
     need('M');
     while (scr_.ok && peek() != ')') {
       const long long n = number();
